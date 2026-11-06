@@ -7,118 +7,285 @@
 <style>
   :root {
     --bg: #f6f4ef; --card: #ffffff; --text: #1f1d1a; --muted: #6b665e;
-    --line: #dcd7cc; --accent: #2f5d50; --accent-text: #ffffff; --error: #a3362a;
+    --line: #dcd7cc; --accent: #2f5d50; --accent-text: #ffffff; --error: #a3362a; --field: #fbfaf7;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #171614; --card: #22201d; --text: #ece8e1; --muted: #a39d93;
-      --line: #3a3732; --accent: #7fb8a4; --accent-text: #10201b; --error: #e58a7e;
+      --line: #3a3732; --accent: #7fb8a4; --accent-text: #10201b; --error: #e58a7e; --field: #1b1a17;
     }
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px 16px;
+    margin: 0; min-height: 100vh; padding: 48px 16px;
     background: var(--bg); color: var(--text);
     font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
   }
-  main { width: 100%; max-width: 480px; }
+  main { width: 100%; max-width: 560px; margin: 0 auto; }
   h1 { font: 600 1.75rem/1.2 Georgia, "Times New Roman", serif; margin: 0 0 6px; }
   .sub { color: var(--muted); margin: 0 0 24px; }
   .drop {
     display: block; border: 2px dashed var(--line); border-radius: 14px; background: var(--card);
-    padding: 40px 20px; text-align: center; cursor: pointer; transition: border-color .15s, background .15s;
+    padding: 36px 20px; text-align: center; cursor: pointer; transition: border-color .15s;
   }
   .drop:hover, .drop.over { border-color: var(--accent); }
-  .drop.busy { pointer-events: none; opacity: .6; }
   .drop strong { display: block; font-size: 1.05rem; margin-bottom: 4px; }
   .drop span { color: var(--muted); font-size: .9rem; }
   input[type=file] { display: none; }
-  #status { min-height: 1.5em; margin: 18px 0 0; color: var(--muted); }
-  #status.error { color: var(--error); }
-  .bar { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; margin-top: 10px; display: none; }
-  .bar.on { display: block; }
-  .bar::after {
-    content: ""; display: block; height: 100%; width: 35%; background: var(--accent);
-    animation: slide 1.2s ease-in-out infinite;
+  #engine { margin: 14px 0 0; color: var(--muted); font-size: .9rem; }
+  #engine.error { color: var(--error); }
+  #cards { display: grid; gap: 14px; margin-top: 20px; }
+  .card {
+    display: grid; grid-template-columns: 84px 1fr; gap: 16px; padding: 16px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
   }
+  .cover {
+    width: 84px; aspect-ratio: 2 / 3; object-fit: cover; border-radius: 4px;
+    background: var(--line); border: 1px solid var(--line);
+  }
+  .cover:not([src]) { visibility: hidden; }
+  .body { min-width: 0; }
+  .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .status { color: var(--muted); font-size: .9rem; margin-top: 2px; }
+  .status.error { color: var(--error); }
+  .bar { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; margin-top: 10px; }
+  .bar > i { display: block; height: 100%; width: 35%; background: var(--accent); animation: slide 1.2s ease-in-out infinite; }
+  .bar.progress > i { animation: none; transition: width .2s; }
+  .bar[hidden] { display: none; }
   @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
-  #download {
-    display: none; margin-top: 18px; padding: 14px 18px; border-radius: 10px; text-align: center;
-    background: var(--accent); color: var(--accent-text); font-weight: 600; text-decoration: none;
+  .fields { display: grid; gap: 8px; margin-top: 12px; }
+  .fields[hidden] { display: none; }
+  .fields label { display: grid; gap: 2px; font-size: .8rem; color: var(--muted); }
+  .fields input[type=text] {
+    font: inherit; color: var(--text); background: var(--field);
+    border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; width: 100%;
   }
-  #download.on { display: block; }
+  .fields input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+  button {
+    font: inherit; font-size: .9rem; cursor: pointer; border-radius: 8px; padding: 8px 14px;
+    border: 1px solid var(--line); background: transparent; color: var(--text);
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: default; }
   footer { margin-top: 28px; color: var(--muted); font-size: .85rem; }
+  @media (max-width: 420px) {
+    .card { grid-template-columns: 64px 1fr; gap: 12px; padding: 12px; }
+    .cover { width: 64px; }
+  }
 </style>
 </head>
 <body>
 <main>
   <h1>PDF a EPUB</h1>
-  <p class="sub">Convierte un libro en PDF a un EPUB listo para Kindle.</p>
+  <p class="sub">Convierte libros en PDF a EPUB listos para Kindle.</p>
 
   <label class="drop" id="drop">
-    <input type="file" id="file" accept="application/pdf,.pdf">
-    <strong>Elegir PDF</strong>
-    <span>o arrástralo aquí</span>
+    <input type="file" id="file" accept="application/pdf,.pdf" multiple>
+    <strong>Elegir PDFs</strong>
+    <span>o arrástralos aquí · puedes elegir varios</span>
   </label>
+  <p id="engine">Cargando el conversor…</p>
 
-  <p id="status">Cargando el conversor…</p>
-  <div class="bar on" id="bar"></div>
-  <a id="download" href="#">Descargar EPUB</a>
+  <section id="cards"></section>
 
-  <footer>El PDF se procesa en tu navegador: no se sube a ningún servidor.
-    No funciona con PDFs escaneados (sin texto).</footer>
+  <footer>Todo se procesa en tu navegador: los PDF no se suben a ningún servidor.
+    Los PDF escaneados se leen con OCR (español e inglés), que es más lento.</footer>
 </main>
+
+<template id="card">
+  <article class="card">
+    <img class="cover" alt="Portada">
+    <div class="body">
+      <div class="name"></div>
+      <div class="status">En espera…</div>
+      <div class="bar"><i></i></div>
+      <div class="fields" hidden>
+        <label>Título <input type="text" class="title"></label>
+        <label>Autor <input type="text" class="author"></label>
+        <div class="actions">
+          <button class="primary download">Descargar EPUB</button>
+          <button class="change-cover">Cambiar portada</button>
+        </div>
+        <input type="file" class="cover-input" accept="image/*">
+      </div>
+    </div>
+  </article>
+</template>
+
 <script>
   const $ = (id) => document.getElementById(id);
-  const drop = $("drop"), input = $("file"), status = $("status"), bar = $("bar"), link = $("download");
+  const LANGS = { es: "español", en: "inglés", fr: "francés", pt: "portugués", it: "italiano", de: "alemán" };
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+  // ---- converter (Pyodide in a worker)
   const worker = new Worker("worker.js");
-  let ready = false, current = "";
-
-  function show(text, { busy = false, error = false } = {}) {
-    status.textContent = text;
-    status.classList.toggle("error", error);
-    bar.classList.toggle("on", busy);
-    drop.classList.toggle("busy", busy);
-  }
-
+  const pending = new Map();
+  let nextId = 0;
   worker.onmessage = ({ data }) => {
-    if (data.type === "ready") {
-      ready = true;
-      if (current) {                                   // a file was chosen while loading
-        show(`Convirtiendo “${current.name}”…`, { busy: true });
-        return worker.postMessage(current, [current.buffer]);
-      }
-      show("Listo. Elige un PDF.");
-    } else if (data.type === "done") {
-      const blob = new Blob([data.epub], { type: "application/epub+zip" });
-      if (link.href.startsWith("blob:")) URL.revokeObjectURL(link.href);
-      link.href = URL.createObjectURL(blob);
-      link.download = current.name.replace(/\.pdf$/i, "") + ".epub";
-      link.classList.add("on");
-      show(`Listo: ${data.chapters} capítulos.`);
-      current = "";
-    } else {
-      show(data.message === "scanned"
-        ? "Este PDF es escaneado (solo imágenes): necesita OCR antes de convertirlo."
-        : "No se pudo convertir: " + data.message, { error: true });
-      current = "";
+    if (data.type === "ready") { $("engine").hidden = true; return; }
+    if (data.type === "fatal") {
+      $("engine").textContent = "No se pudo cargar el conversor. Recarga la página.";
+      $("engine").classList.add("error");
+      return;
     }
+    pending.get(data.rid)?.(data);
+    pending.delete(data.rid);
   };
+  const call = (msg, transfer = []) => new Promise((resolve) => {
+    const rid = ++nextId;
+    pending.set(rid, resolve);
+    worker.postMessage({ ...msg, rid }, transfer);
+  });
 
-  async function handleFile(file) {
-    if (!file) return;
-    if (!/\.pdf$/i.test(file.name)) return show("Ese archivo no es un PDF.", { error: true });
-    link.classList.remove("on");
-    current = { name: file.name, buffer: await file.arrayBuffer() };
-    show(ready ? `Convirtiendo “${file.name}”…` : "Cargando el conversor (solo la primera vez)…", { busy: true });
-    if (ready) worker.postMessage(current, [current.buffer]);
+  // ---- OCR for scanned PDFs (Tesseract, loaded only when needed)
+  let ocrEngine;
+  async function getOcr() {
+    if (!ocrEngine) {
+      await new Promise((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
+        s.onload = resolve;
+        s.onerror = () => reject(new Error("no se pudo cargar el OCR"));
+        document.head.append(s);
+      });
+      ocrEngine = await Tesseract.createWorker("spa+eng");
+    }
+    return ocrEngine;
   }
-  window.handleFile = handleFile;
 
-  input.addEventListener("change", () => { handleFile(input.files[0]); input.value = ""; });
+  async function runOcr(card, pages) {
+    card.status(`PDF escaneado: preparando el OCR…`, true);
+    const ocr = await getOcr();
+    const result = [];
+    for (let i = 0; i < pages; i++) {
+      card.status(`Leyendo texto con OCR: página ${i + 1} de ${pages}`, true, i / pages);
+      const r = await call({ type: "render", page: i });
+      if (!r.ok) throw new Error(r.message);
+      const blob = new Blob([r.png], { type: "image/png" });
+      const bmp = await createImageBitmap(blob);
+      const page = { w: bmp.width, h: bmp.height, paragraphs: [] };
+      bmp.close();
+      const { data } = await ocr.recognize(blob, {}, { blocks: true });
+      for (const block of data.blocks || []) {
+        for (const p of block.paragraphs) {
+          page.paragraphs.push({ lines: p.lines.map((l) => ({ text: l.text, ...l.bbox })) });
+        }
+      }
+      result.push(page);
+    }
+    return result;
+  }
+
+  // ---- one card per PDF; conversions run one after another
+  let queue = Promise.resolve();
+  const enqueue = (job) => (queue = queue.then(job, job));
+
+  async function toJpeg(file) {
+    const bmp = await createImageBitmap(file);
+    const scale = Math.min(1, 1600 / bmp.height);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bmp.width * scale);
+    canvas.height = Math.round(bmp.height * scale);
+    canvas.getContext("2d").drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    bmp.close();
+    const blob = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.9));
+    return blob.arrayBuffer();
+  }
+
+  function addCard(file) {
+    const el = $("card").content.firstElementChild.cloneNode(true);
+    const q = (sel) => el.querySelector(sel);
+    const card = {
+      name: file.name, pdf: null, ocr: null, cover: null, title: null, author: null, url: null, dirty: false,
+      status(text, busy = false, progress = null, error = false) {
+        q(".status").textContent = text;
+        q(".status").classList.toggle("error", error);
+        q(".bar").hidden = !busy;
+        q(".bar").classList.toggle("progress", progress !== null);
+        q(".bar > i").style.width = progress !== null ? `${Math.max(3, progress * 100)}%` : "";
+        q(".download").disabled = busy;
+      },
+    };
+    q(".name").textContent = file.name;
+    $("cards").prepend(el);
+
+    const markDirty = () => { card.dirty = true; q(".download").textContent = "Aplicar cambios y descargar"; };
+    q(".title").addEventListener("input", markDirty);
+    q(".author").addEventListener("input", markDirty);
+    q(".change-cover").addEventListener("click", () => q(".cover-input").click());
+    q(".cover-input").addEventListener("change", async (e) => {
+      const img = e.target.files[0];
+      e.target.value = "";
+      if (!img) return;
+      try {
+        card.cover = await toJpeg(img);
+        q(".cover").src = URL.createObjectURL(new Blob([card.cover], { type: "image/jpeg" }));
+        markDirty();
+      } catch {
+        card.status("No se pudo leer esa imagen.", false, null, true);
+      }
+    });
+    q(".download").addEventListener("click", async () => {
+      if (card.dirty) {
+        card.title = q(".title").value;
+        card.author = q(".author").value;
+        card.dirty = false;
+        q(".download").textContent = "Descargar EPUB";
+        await enqueue(() => convert(card));
+      }
+      if (!card.url) return;
+      const a = document.createElement("a");
+      a.href = card.url;
+      a.download = card.name.replace(/\.pdf$/i, "") + ".epub";
+      a.click();
+    });
+
+    async function convert(card) {
+      try {
+        card.status(card.ocr ? "Armando el EPUB…" : "Convirtiendo…", true);
+        const msg = () => ({
+          type: "convert", name: card.name, pdf: card.pdf.slice(0), title: card.title, author: card.author,
+          cover: card.cover ? card.cover.slice(0) : null, ocr: card.ocr,
+        });
+        let r = await call(msg());
+        if (!r.ok && r.scanned) {
+          card.ocr = await runOcr(card, r.pages);
+          card.status("Armando el EPUB…", true);
+          r = await call(msg());
+        }
+        if (!r.ok) throw new Error(r.message);
+        const { info } = r;
+        if (card.url) URL.revokeObjectURL(card.url);
+        card.url = URL.createObjectURL(new Blob([r.epub], { type: "application/epub+zip" }));
+        if (r.cover.length && !card.cover) q(".cover").src = URL.createObjectURL(new Blob([r.cover], { type: "image/jpeg" }));
+        if (!card.dirty) { q(".title").value = info.title; q(".author").value = info.author; }
+        q(".fields").hidden = false;
+        card.status(["Listo", plural(info.chapters, "capítulo"), info.images ? plural(info.images, "imagen").replace("imagens", "imágenes") : "",
+                     LANGS[info.lang] || info.lang, card.ocr ? "con OCR" : ""].filter(Boolean).join(" · "));
+      } catch (e) {
+        card.status("No se pudo convertir: " + (e.message || e), false, null, true);
+      }
+    }
+
+    enqueue(async () => {
+      card.pdf = await file.arrayBuffer();
+      await convert(card);
+    });
+  }
+
+  function addFiles(files) {
+    for (const f of files) {
+      if (/\.pdf$/i.test(f.name) || f.type === "application/pdf") addCard(f);
+    }
+  }
+  window.addFiles = addFiles;
+
+  const drop = $("drop"), input = $("file");
+  input.addEventListener("change", () => { addFiles(input.files); input.value = ""; });
   ["dragenter", "dragover"].forEach((e) => drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.classList.add("over"); }));
   ["dragleave", "drop"].forEach((e) => drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.classList.remove("over"); }));
-  drop.addEventListener("drop", (ev) => handleFile(ev.dataTransfer.files[0]));
+  drop.addEventListener("drop", (ev) => addFiles(ev.dataTransfer.files));
 </script>
 </body>
 </html>
