@@ -149,7 +149,8 @@ def split_paragraphs(lines):
     for prev, l in zip(lines, lines[1:]):
         g = groups[-1]
         heading_end = prev["bold"] and not l["bold"] and all(x["bold"] for x in g)
-        new_para = ends_sentence(prev["text"]) and starts_paragraph(l["text"]) and (
+        number_only = re.fullmatch(r"[\dIVXLC]+\.?", plain(" ".join(x["text"] for x in g)).strip())  # "6." before its title
+        new_para = not number_only and ends_sentence(prev["text"]) and starts_paragraph(l["text"]) and (
             l["x0"] - left > 0.012 or right - prev["x1"] > 0.25 * (right - left))
         if heading_end or new_para:
             groups.append([l])
@@ -290,8 +291,10 @@ def extract(items, n_pages, default_title):
     if not texts:
         raise ValueError("no text found (scanned PDF): install Tesseract for OCR, or use the web page")
     norm = lambda s: re.sub(r"\d+", "#", plain(s).lower())
-    counts = collections.Counter(norm(join(i["lines"])) for i in texts)
-    repeated = {t for t, n in counts.items() if n > max(3, n_pages * 0.2)}
+    top = collections.Counter(norm(join(i["lines"])) for i in texts if i["y0"] < MARGIN)
+    bottom = collections.Counter(norm(join(i["lines"])) for i in texts if i["y1"] > 1 - MARGIN)
+    headers = {t for t, n in top.items() if n >= 3}     # running heads (book title, chapter title) at the top
+    footers = {t for t, n in bottom.items() if n > max(3, n_pages * 0.2)}   # stricter: short footnotes live down there too
     body = collections.Counter(round(i["size"]) for i in texts).most_common(1)[0][0]
     page_chars = collections.Counter()
     for i in texts:
@@ -299,6 +302,19 @@ def extract(items, n_pages, default_title):
     front = max(5, n_pages * 0.05)
     legal_pages = {i["page"] for i in texts if i["page"] < front and LEGAL.search(plain(join(i["lines"])))}
     image_uses = collections.Counter(hash(i["image"]) for i in items if i["kind"] == "image" and i["image"])
+    footnotes = set()                                   # small text that closes a page, however tall the notes area is
+    by_page = collections.defaultdict(list)
+    for i in texts:
+        by_page[i["page"]].append(i)
+    for page_texts in by_page.values():
+        tail = []
+        for i in reversed(page_texts):
+            if i["size"] >= body * 0.9:
+                break
+            if not re.fullmatch(r"[\d\W_]+", plain(join(i["lines"]))):   # skip the page number at the bottom
+                tail.append(i)
+        if tail and min(i["y0"] for i in tail) > 0.3:
+            footnotes.update(id(i) for i in tail)
 
     chapters = [[default_title, [], []]]               # [title, paragraphs, footnotes]
     credits, images = [], {}
@@ -333,7 +349,7 @@ def extract(items, n_pages, default_title):
         flat = plain(text)
         if not flat.strip() or re.fullmatch(r"[\d\W_]+", flat):
             continue                                    # page number (also "15 ■")
-        if norm(text) in repeated and (it["y0"] < MARGIN or it["y1"] > 1 - MARGIN):
+        if (it["y0"] < MARGIN and norm(text) in headers) or (it["y1"] > 1 - MARGIN and norm(text) in footers):
             continue                                    # repeated header or footer
         if page in legal_pages:
             credits.append(text)                        # copyright page: moved to the end
@@ -366,12 +382,16 @@ def extract(items, n_pages, default_title):
             prev_title = (page, it["y1"])
             continue
         prev_title = None
-        if size < body * 0.9 and it["y0"] > 0.6:
-            notes = chapters[-1][2]                     # footnote: small text at the bottom of the page
-            if notes and not ends_sentence(notes[-1]) and not NOTE_KEY.match(text):
-                notes[-1] = join([notes[-1], text])
-            else:
-                notes.append(text)
+        if id(it) in footnotes:
+            notes = chapters[-1][2]                     # footnotes: one per "N text", continuations joined
+            for l in lines:
+                m, last = NOTE_KEY.match(l), NOTE_KEY.match(notes[-1]) if notes else None
+                follows = (m and last and m.group(1).isdigit() and last.group(1).isdigit()
+                           and int(m.group(1)) == int(last.group(1)) + 1)
+                if notes and not (m and (follows or ends_sentence(notes[-1]))):
+                    notes[-1] = join([notes[-1], l])
+                else:
+                    notes.append(join([l]))
             continue
         if len(flat) < 150 and not flat.endswith(".") and (it["bold"] or size >= body * 1.1):
             if re.match(r"\d+\.\s", flat) and flat.upper() == flat:
@@ -424,7 +444,8 @@ def chapter_html(heading, paras, notes, notes_label):
         used.add(k)
         return f'<sup><a epub:type="noteref" id="r{k}" href="#n{k}">{key}</a></sup>'
 
-    html = f"<h2>{to_html(heading)}</h2>\n"
+    # in the title only "*"-style notes are linked (stray digits there are usually layout artefacts)
+    html = f"<h2>{to_html(heading, lambda key: link(key) if not key.strip().isdigit() else f'<sup>{key}</sup>')}</h2>\n"
     for p in paras:
         if isinstance(p, str):
             html += f"<p>{to_html(p, link)}</p>\n"
