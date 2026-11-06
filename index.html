@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF a EPUB</title>
+<style>
+  :root {
+    --bg: #f6f4ef; --card: #ffffff; --text: #1f1d1a; --muted: #6b665e;
+    --line: #dcd7cc; --accent: #2f5d50; --accent-text: #ffffff; --error: #a3362a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #171614; --card: #22201d; --text: #ece8e1; --muted: #a39d93;
+      --line: #3a3732; --accent: #7fb8a4; --accent-text: #10201b; --error: #e58a7e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px 16px;
+    background: var(--bg); color: var(--text);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { width: 100%; max-width: 480px; }
+  h1 { font: 600 1.75rem/1.2 Georgia, "Times New Roman", serif; margin: 0 0 6px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .drop {
+    display: block; border: 2px dashed var(--line); border-radius: 14px; background: var(--card);
+    padding: 40px 20px; text-align: center; cursor: pointer; transition: border-color .15s, background .15s;
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); }
+  .drop.busy { pointer-events: none; opacity: .6; }
+  .drop strong { display: block; font-size: 1.05rem; margin-bottom: 4px; }
+  .drop span { color: var(--muted); font-size: .9rem; }
+  input[type=file] { display: none; }
+  #status { min-height: 1.5em; margin: 18px 0 0; color: var(--muted); }
+  #status.error { color: var(--error); }
+  .bar { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; margin-top: 10px; display: none; }
+  .bar.on { display: block; }
+  .bar::after {
+    content: ""; display: block; height: 100%; width: 35%; background: var(--accent);
+    animation: slide 1.2s ease-in-out infinite;
+  }
+  @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+  #download {
+    display: none; margin-top: 18px; padding: 14px 18px; border-radius: 10px; text-align: center;
+    background: var(--accent); color: var(--accent-text); font-weight: 600; text-decoration: none;
+  }
+  #download.on { display: block; }
+  footer { margin-top: 28px; color: var(--muted); font-size: .85rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>PDF a EPUB</h1>
+  <p class="sub">Convierte un libro en PDF a un EPUB listo para Kindle.</p>
+
+  <label class="drop" id="drop">
+    <input type="file" id="file" accept="application/pdf,.pdf">
+    <strong>Elegir PDF</strong>
+    <span>o arrástralo aquí</span>
+  </label>
+
+  <p id="status">Cargando el conversor…</p>
+  <div class="bar on" id="bar"></div>
+  <a id="download" href="#">Descargar EPUB</a>
+
+  <footer>El PDF se procesa en tu navegador: no se sube a ningún servidor.
+    No funciona con PDFs escaneados (sin texto).</footer>
+</main>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const drop = $("drop"), input = $("file"), status = $("status"), bar = $("bar"), link = $("download");
+  const worker = new Worker("worker.js");
+  let ready = false, current = "";
+
+  function show(text, { busy = false, error = false } = {}) {
+    status.textContent = text;
+    status.classList.toggle("error", error);
+    bar.classList.toggle("on", busy);
+    drop.classList.toggle("busy", busy);
+  }
+
+  worker.onmessage = ({ data }) => {
+    if (data.type === "ready") {
+      ready = true;
+      if (current) {                                   // a file was chosen while loading
+        show(`Convirtiendo “${current.name}”…`, { busy: true });
+        return worker.postMessage(current, [current.buffer]);
+      }
+      show("Listo. Elige un PDF.");
+    } else if (data.type === "done") {
+      const blob = new Blob([data.epub], { type: "application/epub+zip" });
+      if (link.href.startsWith("blob:")) URL.revokeObjectURL(link.href);
+      link.href = URL.createObjectURL(blob);
+      link.download = current.name.replace(/\.pdf$/i, "") + ".epub";
+      link.classList.add("on");
+      show(`Listo: ${data.chapters} capítulos.`);
+      current = "";
+    } else {
+      show(data.message === "scanned"
+        ? "Este PDF es escaneado (solo imágenes): necesita OCR antes de convertirlo."
+        : "No se pudo convertir: " + data.message, { error: true });
+      current = "";
+    }
+  };
+
+  async function handleFile(file) {
+    if (!file) return;
+    if (!/\.pdf$/i.test(file.name)) return show("Ese archivo no es un PDF.", { error: true });
+    link.classList.remove("on");
+    current = { name: file.name, buffer: await file.arrayBuffer() };
+    show(ready ? `Convirtiendo “${file.name}”…` : "Cargando el conversor (solo la primera vez)…", { busy: true });
+    if (ready) worker.postMessage(current, [current.buffer]);
+  }
+  window.handleFile = handleFile;
+
+  input.addEventListener("change", () => { handleFile(input.files[0]); input.value = ""; });
+  ["dragenter", "dragover"].forEach((e) => drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((e) => drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.classList.remove("over"); }));
+  drop.addEventListener("drop", (ev) => handleFile(ev.dataTransfer.files[0]));
+</script>
+</body>
+</html>
