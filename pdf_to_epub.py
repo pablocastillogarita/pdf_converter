@@ -317,12 +317,16 @@ def extract(items, n_pages, default_title):
             footnotes.update(id(i) for i in tail)
 
     chapters = [[default_title, [], []]]               # [title, paragraphs, footnotes]
+    starts = [0]                                        # first page of each chapter
     credits, images = [], {}
     prev_title = None                                   # (page, y1) of the last title block
+    prev_head = None                                    # (page, y1) of the last subtitle-sized heading
+    last_notes = []                                     # notes list that got the latest footnote
 
     def new_chapter(text):
         if plain(text).casefold() != plain(chapters[-1][0]).casefold():   # same title again: keep going
             chapters.append([text, [], []])
+            starts.append(page)
 
     for it in items:
         paras, page = chapters[-1][1], it["page"]
@@ -379,41 +383,80 @@ def extract(items, n_pages, default_title):
                 chapters[-1][0] = join([chapters[-1][0], text])   # title split across several blocks
             else:
                 new_chapter(text)                       # large title -> new chapter
-            prev_title = (page, it["y1"])
+            prev_title, prev_head = (page, it["y1"]), None
             continue
         prev_title = None
         if id(it) in footnotes:
             notes = chapters[-1][2]                     # footnotes: one per "N text", continuations joined
             for l in lines:
-                m, last = NOTE_KEY.match(l), NOTE_KEY.match(notes[-1]) if notes else None
+                m = NOTE_KEY.match(l)
+                target = notes or (last_notes if not m else [])   # a note continued from the previous page
+                last = NOTE_KEY.match(target[-1]) if target else None
                 follows = (m and last and m.group(1).isdigit() and last.group(1).isdigit()
                            and int(m.group(1)) == int(last.group(1)) + 1)
-                if notes and not (m and (follows or ends_sentence(notes[-1]))):
-                    notes[-1] = join([notes[-1], l])
+                if target and not (m and (follows or ends_sentence(target[-1]))):
+                    target[-1] = join([target[-1], l])
                 else:
                     notes.append(join([l]))
+                    last_notes = notes
             continue
         if len(flat) < 150 and not flat.endswith(".") and (it["bold"] or size >= body * 1.1):
-            if re.match(r"\d+\.\s", flat) and flat.upper() == flat:
+            close = (prev_head and prev_head[0] == page and it["y0"] - prev_head[1] < 0.03
+                     and len(flat) > 2 and not re.match(r"\d+\.\s", flat))   # not index letters "K", "M"
+            if close and not paras and flat.upper() == flat:
+                chapters[-1][0] = join([chapters[-1][0], text])   # second line of a numbered title
+            elif close and paras and isinstance(paras[-1], tuple) and paras[-1][0] == "sub":
+                paras[-1] = ("sub", join([paras[-1][1], text]))  # subtitle on two lines
+            elif re.match(r"\d+\.\s", flat) and flat.upper() == flat:
                 new_chapter(text)                       # "3. ALL-CAPS TITLE" -> chapter
             else:
                 paras.append(("sub", text))             # subtitle (bold or slightly larger text)
+            prev_head = (page, it["y1"])
             continue
+        prev_head = None
         last = next((k for k in range(len(paras) - 1, -1, -1) if not (isinstance(paras[k], tuple) and paras[k][0] == "img")), None)
         if last is not None and isinstance(paras[last], str) and not ends_sentence(paras[last]):
             paras[last] = join([paras[last], text])     # paragraph split across pages (or around an image): merge
         else:
             paras.append(text)
-    result = []
-    for c in chapters:
+    result, result_starts = [], []
+    tiny = lambda c: not c[2] and sum(len(plain(p if isinstance(p, str) else p[1])) for p in c[1]
+                                      if isinstance(p, str) or p[0] in ("sub", "toc")) < 300
+    for c, start in zip(chapters, starts):
         if not c[1]:
             continue
         if result and plain(result[-1][0]).casefold() == plain(c[0]).casefold():
             result[-1][1] += c[1]                       # same title twice (cover, half-title...): one chapter
             result[-1][2] += c[2]
+        elif result and start < front and result_starts[-1] < front and tiny(result[-1]) and tiny(c):
+            result[-1][1] += [("sub", c[0])] + c[1]     # title pages (author, title, publisher): one section
         else:
             result.append(c)
+            result_starts.append(start)
+    move_notes(result)
     return result, credits, images
+
+REF = re.compile(r"\x01\s*([^\x02]+?)\s*\x02")
+PARENT = re.compile(r"(cap[ií]tulo|chapter|chapitre|kapitel|parte?|part|libro|book|livre|t[ií]tulo)\b", re.I)
+
+def move_notes(chapters):
+    """A section that starts mid-page gets that page's footnotes: give back the ones referenced before it."""
+    note_key = lambda n: (NOTE_KEY.match(n) or [None, None])[1]
+    refs = [collections.Counter(k.strip() for p in c[1] if isinstance(p, str) for k in REF.findall(p)) for c in chapters]
+    for i in range(1, len(chapters)):
+        prev, cur = chapters[i - 1], chapters[i]
+        want = refs[i - 1] - collections.Counter(note_key(n) for n in prev[2])
+        spare = collections.Counter(note_key(n) for n in cur[2]) - refs[i]
+        keep = []
+        for n in cur[2]:
+            k = note_key(n)
+            if k and want[k] > 0 and spare[k] > 0:
+                prev[2].append(n)
+                want[k] -= 1
+                spare[k] -= 1
+            else:
+                keep.append(n)
+        cur[2][:] = keep
 
 # ---------------------------------------------------------------- writing the EPUB
 
@@ -497,16 +540,28 @@ def build_epub(title, author, lang, chapters, credits, images, cover):
         spine.append(f"c{i}")
         toc.append((name, escape(plain(heading))))
 
-    files["OEBPS/nav.xhtml"] = page(toc_label, f'<nav epub:type="toc" id="toc"><h1>{toc_label}</h1><ol>\n'
-                                    + "".join(f'<li><a href="{n}">{t}</a></li>\n' for n, t in toc) + "</ol></nav>")
+    tree, parent = [], False                            # "1. Section" entries go inside the "Chapter I" before them
+    for n, t in toc:
+        if PARENT.match(t):
+            parent = True
+        elif not (parent and re.match(r"\d+\.\s", t)):
+            parent = False
+        if parent and re.match(r"\d+\.\s", t) and tree:
+            tree[-1][2].append((n, t, []))
+        else:
+            tree.append((n, t, []))
+    nav = lambda nodes: "<ol>\n" + "".join(f'<li><a href="{n}">{t}</a>' + (nav(kids) if kids else "") + "</li>\n"
+                                           for n, t, kids in nodes) + "</ol>"
+    order = iter(range(1, len(toc) + 1))
+    ncx = lambda nodes: "".join(f'<navPoint id="n{(o := next(order))}" playOrder="{o}"><navLabel><text>{t}</text></navLabel>'
+                                f'<content src="{n}"/>{ncx(kids)}</navPoint>\n' for n, t, kids in nodes)
+    files["OEBPS/nav.xhtml"] = page(toc_label, f'<nav epub:type="toc" id="toc"><h1>{toc_label}</h1>{nav(tree)}</nav>')
     files["OEBPS/toc.ncx"] = (
         '<?xml version="1.0" encoding="utf-8"?>\n'
         '<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">\n'
         f'<head><meta name="dtb:uid" content="{uid}"/></head>\n'
         f"<docTitle><text>{escape(title)}</text></docTitle>\n<navMap>\n"
-        + "".join(f'<navPoint id="n{i}" playOrder="{i + 1}"><navLabel><text>{t}</text></navLabel>'
-                  f'<content src="{n}"/></navPoint>\n' for i, (n, t) in enumerate(toc))
-        + "</navMap>\n</ncx>")
+        + ncx(tree) + "</navMap>\n</ncx>")
     modified = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     files["OEBPS/content.opf"] = (
         '<?xml version="1.0" encoding="utf-8"?>\n'
